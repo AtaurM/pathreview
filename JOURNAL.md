@@ -33,3 +33,75 @@ already a named failing test pinning the expected behavior. The scope is
 bounded and the definition of "done" is objective. No API, schema, or
 cross-module changes are involved, which is why I chose it over a broader
 Tier 2/3 issue while I'm still learning the repo layout.
+
+## Reproduction (Week 8) — issue #153 confirmed locally
+
+Confirmed the crash reproduces reliably in my local environment on branch
+`fix/153-faithfulness-none-context-text`. It is deterministic: it fails on
+every run, with no setup beyond the standard local install.
+
+### Steps to reproduce
+
+Run the existing test that already pins this behavior (from the repo root):
+
+```
+python -m pytest tests/unit/test_faithfulness_checker.py -k none_context_chunk_text
+```
+
+Observed output:
+
+```
+>       context_text = " ".join([
+            chunk.get("text", "") for chunk in context_chunks
+        ])
+E       TypeError: sequence item 0: expected str instance, NoneType found
+rag\evaluator\faithfulness_checker.py:34: TypeError
+```
+
+The same crash reproduces in two lines without pytest:
+
+```python
+from rag.evaluator.faithfulness_checker import FaithfulnessChecker
+FaithfulnessChecker().check("Has Python skills", [{"text": None}])
+```
+
+### Where the issue lives
+
+`FaithfulnessChecker.check()` in `rag/evaluator/faithfulness_checker.py`,
+lines 34-36. Context is assembled with `chunk.get("text", "")`, but `dict.get`
+only falls back to the `""` default when the **key is absent**. A chunk that
+carries the key with an explicit `None` value returns `None`, and the
+enclosing `" ".join(...)` rejects it with a `TypeError`.
+
+That the sibling test `test_missing_text_key_in_chunk` (chunk `{"content": ...}`
+with no `text` key at all) **passes** confirms the default works for missing
+keys and isolates an explicit `None` value as the sole trigger.
+
+### Test baseline before any fix
+
+`python -m pytest tests/unit/test_faithfulness_checker.py` → **4 failed, 18 passed**.
+
+Only `test_none_context_chunk_text` is caused by this issue. The other three
+failures (`test_partial_support_returns_middle_score`,
+`test_multiple_context_chunks`, `test_multiple_claims_varying_support`) are
+pre-existing and unrelated: they are scoring-threshold assertions, where
+single-claim feedback scores exactly 0.0 or 1.0 and never lands in the
+expected middle range. They are out of scope for #153. A correct fix should
+therefore move the file to **3 failed, 19 passed**, not to all-green.
+
+### Notes gathered while reproducing
+
+1. **A sibling module crashes first on the same input.** Through the real
+   entry point `EvalSuite.run()` (`rag/evaluator/eval_suite.py:28`),
+   `RelevanceScorer.score()` is called on line 40, *before* the faithfulness
+   check on line 43. `relevance_scorer.py:32` uses the identical
+   `chunk.get("text", "")` pattern and dies earlier with
+   `AttributeError: 'NoneType' object has no attribute 'lower'`. So fixing
+   only the faithfulness checker satisfies issue #153 and its test, but the
+   end-to-end evaluator still breaks on a `text: None` chunk. Recording this
+   as a follow-up rather than expanding scope.
+
+2. **`text: None` is reachable, not hypothetical.** `rag/retriever/hybrid.py:126`
+   copies ChromaDB `documents` values straight into the `text` field with no
+   coercion, so a stored-but-empty document propagates a null into exactly the
+   chunk dicts the evaluator consumes.
