@@ -105,3 +105,40 @@ therefore move the file to **3 failed, 19 passed**, not to all-green.
    copies ChromaDB `documents` values straight into the `text` field with no
    coercion, so a stored-but-empty document propagates a null into exactly the
    chunk dicts the evaluator consumes.
+
+## Week 8 — Reproduction & solution planning
+
+**Reproduction commit link:** https://github.com/AtaurM/pathreview/commit/c7aaae6f8cf885a904a061113902fcbfd940dfbb
+
+**Reproduction summary:**
+I reproduced the crash locally by running the repo's existing test
+`python -m pytest tests/unit/test_faithfulness_checker.py -k none_context_chunk_text`,
+which fails deterministically with
+`TypeError: sequence item 0: expected str instance, NoneType found` at
+`rag/evaluator/faithfulness_checker.py:34` — the `" ".join(...)` over
+`chunk.get("text", "")`, whose `""` default never fires for a key that is
+present with a `None` value. I confirmed the same crash in a two-line snippet
+without pytest, and confirmed that the sibling test
+`test_missing_text_key_in_chunk` (a chunk with no `text` key at all) passes,
+which isolates an explicit `None` as the sole trigger rather than a general
+problem with the default.
+
+**PLAN.md link:** https://github.com/AtaurM/pathreview/blob/fix/153-faithfulness-none-context-text/PLAN.md
+
+**Blockers or open questions:**
+1. **Which layer should hold the guard?** Fixing `FaithfulnessChecker` satisfies
+   the issue as written, but the null actually enters at
+   `rag/retriever/hybrid.py:126`, and a guard there would fix every consumer at
+   once. I plan to ask on the issue thread before Week 9.
+2. **A sibling module crashes first on the same input.** Through the real entry
+   point `EvalSuite.run()`, `RelevanceScorer.score()`
+   (`rag/evaluator/relevance_scorer.py:32`) raises
+   `AttributeError: 'NoneType' object has no attribute 'lower'` *before* the
+   faithfulness check ever runs. My fix will make issue #153's test pass while
+   the end-to-end evaluator stays broken on that input. I intend to file this
+   separately rather than widen a Tier 1 PR, but I want to confirm that is the
+   preferred etiquette here.
+3. **Non-string `text` values.** I have not yet traced whether the retriever can
+   emit something like `42` in the `text` field, which decides between
+   `chunk.get("text") or ""` and a `str()` coercion. This is sub-task 2 in
+   PLAN.md.
