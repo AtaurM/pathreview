@@ -160,15 +160,13 @@ decide between `or ""` and a `str()` coercion; sub-task 3, regression tests in
 recorded 4-failed baseline; sub-task 5, open the PR.
 
 **Blockers:**
-No technical blockers — the delay was time, not the code. PLAN.md Risk 2 (three
-pre-existing failures in the target test file) still stands as the thing most
-likely to confuse "done" with "all green" once I start.
+No technical blockers, just personal matters outside of the project. PLAN.md Risk 2 (three pre-existing failures in the target test file) still stands as the thing most likely to confuse "done" with "all green" once I start.
 
 ---
 
 ### Check-in 2 (end of week)
 
-**PR link:** <!-- PASTE PR URL HERE -->
+**PR link:** https://github.com/ascherj/pathreview/pull/955
 
 **Branch:** `fix/153-faithfulness-none-context-text`
 
