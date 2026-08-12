@@ -236,3 +236,118 @@ tests so this PR adds zero new mypy errors, then committed the test file with
 Tier 1 issue. Raised in the PR notes for the maintainer.
 
 **Draft PR feedback received from:** none
+
+## Week 10 — Iteration & reflection
+
+### Reviewer feedback
+
+**Feedback received:** [x] Yes  [ ] No — still awaiting review
+
+**Summary of feedback:**
+Two parts. The positive half was about process: the reviewer called out the
+diagnostic discipline — tracing the root cause through `dict.get` semantics,
+confirming it with the sibling test `test_missing_text_key_in_chunk` that passes
+for a *missing* key, and recording exact baseline failure counts (4 failed / 18
+passed in the file; 53 failed / 375 passed repo-wide) before touching any code.
+
+The critique was about test design. Several of my five new tests assert on exact
+float scores (`test_all_context_chunks_none_returns_zero` asserts
+`score == 0.0`) which couples them to the current scoring implementation. If
+`_is_supported` or `_extract_claims` changes later, those tests break even
+though my null-handling fix is still correct. Suggestion: make the primary
+contract of an edge-case test "returns the right type, raises no exception," and
+move exact score assertions into a separate test that explicitly documents the
+scoring logic it depends on. `test_string_only_chunks_unaffected_by_none_handling`
+was named as the example of the pattern to lean into.
+
+**How you responded:**
+I agree--the fix is about *not crashing*, so the tests should assert
+that first and treat the score value as a separate concern. The concrete change
+I'd make: in `test_all_context_chunks_none_returns_zero` and
+`test_empty_and_whitespace_text_match_none_behavior`, assert
+`isinstance(score, float)` and `0.0 <= score <= 1.0` as the contract, then pull
+the `score == 0.0` assertion into one clearly named test like
+`test_all_null_chunks_score_zero_under_current_scoring` whose docstring says it
+depends on `_is_supported`'s current behavior, so a future contributor who
+changes the scorer knows immediately which test is *supposed* to move.
+`test_non_string_text_does_not_raise` already follows the pattern and needs no
+change. This feedback was not from the PR comments, so I did not respond there.
+
+---
+
+### Reflection
+
+**What was harder than you expected?**
+The hardest part was not the fix (one line) but figuring out what
+"done" meant in a repo that isn't green. `make test-unit` on `main` was already
+53 failed / 375 passed, and three of the four failures in my own target file
+(`test_partial_support_returns_middle_score` and friends) were unrelated
+scoring-threshold assertions. My instinct was to chase them, and if I had, a
+Tier 1 fix would have turned into a rewrite of the scorer. I ended up diffing
+the full list of failing test IDs before and after to prove zero new failures,
+which is a step I never would have thought I needed on my own projects.
+
+The other surprise was tooling disagreeing with itself: `make check` runs mypy
+on source directories only (`Makefile:57`), but the pre-commit hook runs it on
+changed files including `tests/`, and `disallow_untyped_defs = true` in
+`pyproject.toml:79` meant the existing test file threw 25 pre-existing
+`no-untyped-def` errors at me for a file I'd added five tests to.
+
+**What did you learn about working in a large codebase?**
+The main thing is that scope is a real decision, not a formality! While
+reproducing, I found that `RelevanceScorer.score()` in
+`rag/evaluator/relevance_scorer.py:32` has the identical `chunk.get("text", "")`
+bug and actually crashes *first* through the real entry point `EvalSuite.run()`,
+and that the null originates further upstream in `rag/retriever/hybrid.py:126`
+where ChromaDB documents are copied in without coercion. On my own project I
+would have just fixed all three. Here, fixing all three means a Tier 1 PR that
+touches three modules and is harder for a maintainer to review, so I fixed the
+one the issue named and wrote the other two down as follow-ups.
+
+The second lesson is that in someone else's production code, the surrounding
+evidence matters as much as the change. Nobody can see that my one-line diff is
+correct; they can see the baseline table, the reverted-fix check, and the note
+about `--no-verify`. Most of my actual hours went into that, not the code.
+
+**How did AI tools help — and where did they fall short?**
+AI was most useful as an orientation and speed layer. Tracing `text: None` back
+from the evaluator through `EvalSuite.run()` to the retriever would have taken
+me an hour of grepping; asking for the call path got me there in a couple of
+minutes, and I verified each hop by opening the file. It was also good for
+mechanical work like annotating my five tests with `-> None` signatures, and
+drafting the PR description from my notes.
+
+Where it fell short was every judgment call. It could tell me `hybrid.py:126`
+was the true origin of the null, but it couldn't tell me whether fixing there was
+appropriate for a Tier 1 issue in a repo whose etiquette I don't know. That
+was a judgment about the maintainer's expectations. It also confidently suggested 
+"make the test suite pass," which was actively wrong advice here given the 53 
+pre-existing failures. And it would not have caught the test-design problem the 
+reviewer did. `score == 0.0` is a perfectly reasonable-looking assertion, and it 
+took a human thinking about future maintainers to see why it's brittle.
+
+**What would you do differently if you started over?**
+I would have asked the scoping question (one layer or three) in Week 8 when I
+first found the `relevance_scorer.py` duplicate, instead of writing it into
+PLAN.md as an open question and then quietly proceeding with the narrow fix. It
+was still unanswered when I opened the PR, which means the maintainer's first
+read may be "why didn't you fix the other one," and that's a question I created
+by not asking earlier.
+
+I'd also front-load the work. My Week 9 check-in 1 was honest but not great: no
+implementation done at the mid-week mark, all five PLAN.md sub-tasks still open,
+which meant the fix, five tests, baseline verification, and the mypy hook
+surprise all landed in one compressed stretch. And with the reviewer's feedback
+in hand, I'd write edge-case tests contract-first from the start rather than
+reaching for the exact score my implementation happened to produce.
+
+**What are you most proud of from this module?**
+`test_none_text_chunk_does_not_suppress_sibling_chunk`. The issue's own test only
+checked that a `None` chunk doesn't crash, which a lazy fix, like bailing out of the
+loop on the first null, would also satisfy while silently throwing away every
+valid chunk after it. I wrote a test where a null chunk sits *beside* a real one
+and asserted the mixed score equals the real-chunk-alone score. That test came
+from reasoning about how the fix could go wrong, not from the issue text, and
+proving it was a real regression test by reverting the fix and watching four of
+five fail is the moment in this module where I felt like I was actually
+contributing rather than completing an assignment.
